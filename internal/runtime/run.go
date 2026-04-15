@@ -40,6 +40,14 @@ func Run(args []string) error {
 		}
 		sandboxID := args[2]
 		return stopSandbox(sandboxID)
+	case "exec":
+		if len(args) < 4 {
+			return fmt.Errorf("usage: forker exec <id> <command> [args...]")
+		}
+		id := args[2]
+		cmd := args[3]
+		cmdArgs := args[4:]
+		return execInSandbox(id, cmd, cmdArgs)
 
 	default:
 		Usage()
@@ -71,8 +79,8 @@ func runInNamespace(command string, args []string) error {
 
 	childCmd.Stdin = os.Stdin
 
-	childCmd.Stdout = nil
-	childCmd.Stderr = nil
+	childCmd.Stdout = os.Stdout
+	childCmd.Stderr = os.Stderr
 
 	childCmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
