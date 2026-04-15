@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -16,35 +17,33 @@ func IsChildProcess() bool {
 }
 
 func Run(args []string) error {
-	if len(args) < 3 || args[1] != "run" {
+	if len(args) < 2 {
 		Usage()
 		return fmt.Errorf("invalid args")
 	}
 
-	detached := false
-	i := 2
+	switch args[1] {
+	case "run":
+		if len(args) < 3 {
+			return fmt.Errorf("missing command")
+		}
+		command := args[2]
+		commandArgs := args[3:]
+		return runInNamespace(command, commandArgs)
 
-	if args[i] == "-d" {
-		detached = true
-		i++
-	}
+	case "ps":
+		return listSandboxes()
 
-	if i >= len(args) {
+	default:
 		Usage()
-		return fmt.Errorf("missing command")
+		return fmt.Errorf("unknown command")
 	}
-
-	command := args[i]
-	commandArgs := args[i+1:]
-
-	return runInNamespace(command, commandArgs, detached)
 }
-
 func Usage() {
-	fmt.Println(`forker run [-d] <command> [args...]`)
+	fmt.Println(`forker run <command> [args...]`)
 }
 
-func runInNamespace(command string, args []string, detached bool) error {
+func runInNamespace(command string, args []string) error {
 	bin, err := exec.LookPath(command)
 	if err != nil {
 		return fmt.Errorf("cannot find %q: %w", command, err)
@@ -65,13 +64,8 @@ func runInNamespace(command string, args []string, detached bool) error {
 
 	childCmd.Stdin = os.Stdin
 
-	if detached {
-		childCmd.Stdout = nil
-		childCmd.Stderr = nil
-	} else {
-		childCmd.Stdout = os.Stdout
-		childCmd.Stderr = os.Stderr
-	}
+	childCmd.Stdout = nil
+	childCmd.Stderr = nil
 
 	childCmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
@@ -83,48 +77,43 @@ func runInNamespace(command string, args []string, detached bool) error {
 		Setsid: true,
 	}
 
+	argsJson, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+
 	childCmd.Env = append(os.Environ(),
 		childEnv+"=1",
 		"__FORKER_BIN__="+bin,
-		"__FORKER_ARGS__="+encodeArgs(args),
+		"__FORKER_ARGS__="+string(argsJson),
 		"__FORKER_HOSTNAME__="+sandboxID,
 		"__FORKER_SANDBOX_ID__="+sandboxID,
 	)
 
-	if detached {
-		return childCmd.Start()
+	if err := childCmd.Start(); err != nil {
+		return err
 	}
 
-	return childCmd.Run()
+	fmt.Printf("[forker] sandbox %s started (pid=%d)\n", sandboxID, childCmd.Process.Pid)
+
+	return nil
+
 }
 
-func encodeArgs(args []string) string {
-	out := ""
-	for i, a := range args {
-		if i > 0 {
-			out += "\x00"
-		}
-		out += a
-	}
-	return out
-}
-
-func decodeArgs(s string) []string {
-	if s == "" {
-		return nil
+func saveSandbox(id string, pid int, cmd string) error {
+	if err := os.MkdirAll(basePath, 0755); err != nil {
+		return err
 	}
 
-	var res []string
-	cur := ""
+	dir := filepath.Join(basePath, id)
 
-	for i := 0; i < len(s); i++ {
-		if s[i] == 0 {
-			res = append(res, cur)
-			cur = ""
-		} else {
-			cur += string(s[i])
-		}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
 	}
 
-	return append(res, cur)
+	return os.WriteFile(
+		filepath.Join(dir, "pid"),
+		[]byte(fmt.Sprintf("%d", pid)),
+		0644,
+	)
 }
