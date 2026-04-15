@@ -34,6 +34,13 @@ func Run(args []string) error {
 	case "ps":
 		return listSandboxes()
 
+	case "stop":
+		if len(args) < 3 {
+			return fmt.Errorf("missing sandbox id")
+		}
+		sandboxID := args[2]
+		return stopSandbox(sandboxID)
+
 	default:
 		Usage()
 		return fmt.Errorf("unknown command")
@@ -91,6 +98,12 @@ func runInNamespace(command string, args []string) error {
 	)
 
 	if err := childCmd.Start(); err != nil {
+		return err
+	}
+
+	hostPid := childCmd.Process.Pid
+
+	if err := saveSandbox(sandboxID, hostPid, command); err != nil {
 		return err
 	}
 

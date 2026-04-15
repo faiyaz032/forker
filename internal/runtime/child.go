@@ -31,12 +31,6 @@ func ChildMain() error {
 		fmt.Fprintf(os.Stderr, "[forker] network warning: %v\n", err)
 	}
 
-	pid := os.Getpid()
-
-	if err := saveSandbox(cfg.SandboxID, pid, cfg.Bin); err != nil {
-		return fmt.Errorf("save sandbox failed: %w", err)
-	}
-
 	args := append([]string{cfg.Bin}, cfg.Args...)
 	return syscall.Exec(cfg.Bin, args, os.Environ())
 }
