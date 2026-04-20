@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
+	"time"
 )
 
 type Config struct {
@@ -17,14 +19,19 @@ type Config struct {
 func ChildMain() error {
 	cfg := loadConfig()
 
+	readyFile := fmt.Sprintf("/var/run/forker/%s/ready", cfg.SandboxID)
+	if err := os.WriteFile(readyFile, []byte("1"), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "[forker] warning: failed to write readiness file: %v\n", err)
+	}
+
 	fmt.Printf("[forker][%s] child started\n", cfg.SandboxID)
 
 	if err := setHostname(cfg); err != nil {
-		return fmt.Errorf("hostname failed: %w", err)
+		return err
 	}
 
 	if err := setupMounts(); err != nil {
-		return fmt.Errorf("mount failed: %w", err)
+		return err
 	}
 
 	if err := setupNetworking(cfg); err != nil {
@@ -54,4 +61,17 @@ func mustEnv(key string) string {
 		panic(key + " not set")
 	}
 	return v
+}
+
+func waitForSandboxReady(id string) error {
+	readyPath := filepath.Join(basePath, id, "ready")
+
+	for i := 0; i < 50; i++ { // ~5 seconds
+		if _, err := os.Stat(readyPath); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return fmt.Errorf("sandbox not ready")
 }

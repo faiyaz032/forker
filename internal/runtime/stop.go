@@ -45,6 +45,12 @@ func stopSandbox(id string) error {
 	}
 
 	fmt.Printf("[forker] sandbox %s stopped\n", id)
-	return nil
 
+	_ = cleanupVeth(id)
+
+	if err := os.RemoveAll(filepath.Join(basePath, id)); err != nil {
+		fmt.Printf("[forker] warning: failed to remove sandbox state: %v\n", err)
+	}
+
+	return nil
 }

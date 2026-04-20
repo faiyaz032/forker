@@ -73,7 +73,7 @@ func runInNamespace(command string, args []string) error {
 		return err
 	}
 
-	fmt.Printf("[forker] starting %q in sandbox %s\n", bin, sandboxID)
+	fmt.Printf("[forker] starting %q in sandbox %s (v1.0.2)\n", bin, sandboxID)
 
 	childCmd := exec.Command(self)
 
@@ -105,13 +105,31 @@ func runInNamespace(command string, args []string) error {
 		"__FORKER_SANDBOX_ID__="+sandboxID,
 	)
 
+	// Create sandbox directory early so child can write its "ready" file
+	if err := os.MkdirAll(filepath.Join(basePath, sandboxID), 0755); err != nil {
+		return fmt.Errorf("mkdir sandbox: %w", err)
+	}
+
 	if err := childCmd.Start(); err != nil {
 		return err
 	}
 
 	hostPid := childCmd.Process.Pid
 
+	// Save PID file immediately so nsenter (called via setupVeth -> execInSandbox) can find it
 	if err := saveSandbox(sandboxID, hostPid, command); err != nil {
+		return err
+	}
+
+	if err := waitForSandboxReady(sandboxID); err != nil {
+		return err
+	}
+
+	if err := initNetwork(); err != nil {
+		return err
+	}
+
+	if err := setupVeth(sandboxID, hostPid); err != nil {
 		return err
 	}
 

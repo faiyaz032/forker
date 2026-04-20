@@ -8,6 +8,14 @@ import (
 )
 
 func execInSandbox(id, command string, args []string) error {
+	return execInSandboxInternal(id, command, args, true)
+}
+
+func execInSandboxQuietly(id, command string, args []string) error {
+	return execInSandboxInternal(id, command, args, false)
+}
+
+func execInSandboxInternal(id, command string, args []string, verbose bool) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -27,9 +35,11 @@ func execInSandbox(id, command string, args []string) error {
 		"__FORKER_ARGS__="+string(jsonArgs),
 	)
 
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if verbose {
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	return cmd.Run()
 }
