@@ -19,11 +19,6 @@ type Config struct {
 func ChildMain() error {
 	cfg := loadConfig()
 
-	readyFile := fmt.Sprintf("/var/run/forker/%s/ready", cfg.SandboxID)
-	if err := os.WriteFile(readyFile, []byte("1"), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "[forker] warning: failed to write readiness file: %v\n", err)
-	}
-
 	fmt.Printf("[forker][%s] child started\n", cfg.SandboxID)
 
 	if err := setHostname(cfg); err != nil {
@@ -36,6 +31,11 @@ func ChildMain() error {
 
 	if err := setupNetworking(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "[forker] network warning: %v\n", err)
+	}
+
+	readyFile := fmt.Sprintf("/var/run/forker/%s/ready", cfg.SandboxID)
+	if err := os.WriteFile(readyFile, []byte("1"), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "[forker] warning: failed to write readiness file: %v\n", err)
 	}
 
 	args := append([]string{cfg.Bin}, cfg.Args...)
