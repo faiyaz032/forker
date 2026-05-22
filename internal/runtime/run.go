@@ -7,10 +7,67 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
 const childEnv = "__FORKER_CHILD__"
+
+type RunConfig struct {
+	Command   []string
+	MemoryMax string
+	CPUQuota  float64
+	PidsMax   int
+}
+
+func parseRunArgs(args []string) (RunConfig, error) {
+	//default confings
+	cfg := RunConfig{
+		MemoryMax: "256M",
+		CPUQuota:  1.0,
+		PidsMax:   256,
+	}
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+
+		case "--memory":
+			i++
+			cfg.MemoryMax = args[i]
+
+		case "--cpu":
+			i++
+			// parse float
+			v, err := strconv.ParseFloat(args[i], 64)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.CPUQuota = v
+
+		case "--pids":
+			i++
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return cfg, err
+			}
+			cfg.PidsMax = v
+
+		case "--":
+			i++
+			cfg.Command = args[i:]
+			return cfg, nil
+
+		default:
+			cfg.Command = args[i:]
+			return cfg, nil
+		}
+
+		i++
+	}
+
+	return cfg, nil
+}
 
 func IsChildProcess() bool {
 	return os.Getenv(childEnv) == "1"
@@ -24,12 +81,14 @@ func Run(args []string) error {
 
 	switch args[1] {
 	case "run":
-		if len(args) < 3 {
+		cfg, err := parseRunArgs(args[2:])
+		if err != nil {
+			return err
+		}
+		if len(cfg.Command) == 0 {
 			return fmt.Errorf("missing command")
 		}
-		command := args[2]
-		commandArgs := args[3:]
-		return runInNamespace(command, commandArgs)
+		return runInNamespace(cfg)
 
 	case "ps":
 		return listSandboxes()
@@ -58,7 +117,9 @@ func Usage() {
 	fmt.Println(`forker run <command> [args...]`)
 }
 
-func runInNamespace(command string, args []string) error {
+func runInNamespace(cfg RunConfig) error {
+	command := cfg.Command[0]
+	args := cfg.Command[1:]
 	bin, err := exec.LookPath(command)
 	if err != nil {
 		return fmt.Errorf("cannot find %q: %w", command, err)
@@ -105,7 +166,7 @@ func runInNamespace(command string, args []string) error {
 		"__FORKER_SANDBOX_ID__="+sandboxID,
 	)
 
-	// Create sandbox directory early so child can write its "ready" file
+	// create sandbox directory early so child can write its "ready" file
 	if err := os.MkdirAll(filepath.Join(basePath, sandboxID), 0755); err != nil {
 		return fmt.Errorf("mkdir sandbox: %w", err)
 	}
@@ -116,7 +177,7 @@ func runInNamespace(command string, args []string) error {
 
 	hostPid := childCmd.Process.Pid
 
-	// Save PID file immediately so nsenter (called via setupVeth -> execInSandbox) can find it
+	// save PID file immediately so nsenter (called via setupVeth -> execInSandbox) can find it
 	if err := saveSandbox(sandboxID, hostPid, command); err != nil {
 		return err
 	}
