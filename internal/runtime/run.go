@@ -139,7 +139,6 @@ func runInNamespace(cfg RunConfig) error {
 	childCmd := exec.Command(self)
 
 	childCmd.Stdin = os.Stdin
-
 	childCmd.Stdout = os.Stdout
 	childCmd.Stderr = os.Stderr
 
@@ -149,7 +148,6 @@ func runInNamespace(cfg RunConfig) error {
 			syscall.CLONE_NEWNS |
 			syscall.CLONE_NEWIPC |
 			syscall.CLONE_NEWNET,
-
 		Setsid: true,
 	}
 
@@ -166,7 +164,20 @@ func runInNamespace(cfg RunConfig) error {
 		"__FORKER_SANDBOX_ID__="+sandboxID,
 	)
 
-	// create sandbox directory early so child can write its "ready" file
+	var success bool
+	defer func() {
+		// if the container setup fails mid flight, tear down everything so we dont leak resources
+		if !success {
+			if childCmd != nil && childCmd.Process != nil {
+				_ = childCmd.Process.Kill()
+			}
+			_ = cleanupVeth(sandboxID)
+			cgroupPath := filepath.Join("/sys/fs/cgroup", "forker", sandboxID)
+			_ = os.Remove(cgroupPath)
+			_ = os.RemoveAll(filepath.Join(basePath, sandboxID))
+		}
+	}()
+
 	if err := os.MkdirAll(filepath.Join(basePath, sandboxID), 0755); err != nil {
 		return fmt.Errorf("mkdir sandbox: %w", err)
 	}
@@ -177,7 +188,10 @@ func runInNamespace(cfg RunConfig) error {
 
 	hostPid := childCmd.Process.Pid
 
-	// save PID file immediately so nsenter (called via setupVeth -> execInSandbox) can find it
+	if err := setupCgroups(sandboxID, hostPid, cfg); err != nil {
+		return err
+	}
+
 	if err := saveSandbox(sandboxID, hostPid, command); err != nil {
 		return err
 	}
@@ -196,8 +210,8 @@ func runInNamespace(cfg RunConfig) error {
 
 	fmt.Printf("[forker] sandbox %s started (pid=%d)\n", sandboxID, childCmd.Process.Pid)
 
+	success = true
 	return nil
-
 }
 
 func saveSandbox(id string, pid int, cmd string) error {

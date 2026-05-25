@@ -16,30 +16,46 @@ type Config struct {
 	SandboxID string
 }
 
-func ChildMain() error {
+func ChildMain() (err error) {
 	cfg := loadConfig()
 
 	fmt.Printf("[forker][%s] child started\n", cfg.SandboxID)
 
-	if err := setHostname(cfg); err != nil {
+	defer func() {
+		// if things go sideways, make sure we clean up the mounts to avoid leaving trace on the host
+		if r := recover(); r != nil {
+			_ = syscall.Unmount("/proc", syscall.MNT_DETACH)
+			_ = syscall.Unmount("/tmp", syscall.MNT_DETACH)
+			panic(r)
+		} else if err != nil {
+			_ = syscall.Unmount("/proc", syscall.MNT_DETACH)
+			_ = syscall.Unmount("/tmp", syscall.MNT_DETACH)
+		}
+	}()
+
+	if err = setHostname(cfg); err != nil {
 		return err
 	}
 
-	if err := setupMounts(); err != nil {
+	if err = setupMounts(); err != nil {
 		return err
 	}
 
-	if err := setupNetworking(cfg); err != nil {
+	if err = setupNetworking(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "[forker] network warning: %v\n", err)
 	}
 
 	readyFile := fmt.Sprintf("/var/run/forker/%s/ready", cfg.SandboxID)
-	if err := os.WriteFile(readyFile, []byte("1"), 0644); err != nil {
+	if err = os.WriteFile(readyFile, []byte("1"), 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[forker] warning: failed to write readiness file: %v\n", err)
 	}
 
 	args := append([]string{cfg.Bin}, cfg.Args...)
-	return syscall.Exec(cfg.Bin, args, os.Environ())
+	err = syscall.Exec(cfg.Bin, args, os.Environ())
+	if err != nil {
+		logSyscallError("exec", err)
+	}
+	return err
 }
 
 func loadConfig() Config {

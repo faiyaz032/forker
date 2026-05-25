@@ -58,5 +58,9 @@ func ExecChild() error {
 	}
 
 	finalArgs := append([]string{command}, args...)
-	return syscall.Exec(absCmd, finalArgs, os.Environ())
+	err = syscall.Exec(absCmd, finalArgs, os.Environ())
+	if err != nil {
+		logSyscallError("exec", err)
+	}
+	return err
 }

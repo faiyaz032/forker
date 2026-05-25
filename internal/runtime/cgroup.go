@@ -1,11 +1,24 @@
-func setupCgroups(id string, pid int, cfg RunConfig) error {
-	base := filepath.Join("/sys/fs/cgroup", "forker", id)
+package runtime
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+)
+
+func setupCgroups(id string, pid int, cfg RunConfig) error {
+	// enable controllers in root and parent cgroups so child directories can manage resources under cgroups v2
+	_ = os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+cpu +memory +pids"), 0644)
+	parent := filepath.Join("/sys/fs/cgroup", "forker")
+	_ = os.MkdirAll(parent, 0755)
+	_ = os.WriteFile(filepath.Join(parent, "cgroup.subtree_control"), []byte("+cpu +memory +pids"), 0644)
+
+	base := filepath.Join(parent, id)
 	if err := os.MkdirAll(base, 0755); err != nil {
 		return err
 	}
 
-	// memory
 	if cfg.MemoryMax != "" {
 		_ = os.WriteFile(
 			filepath.Join(base, "memory.max"),
@@ -14,7 +27,6 @@ func setupCgroups(id string, pid int, cfg RunConfig) error {
 		)
 	}
 
-	// cpu
 	cpu := cpuToCgroupQuota(cfg.CPUQuota)
 	_ = os.WriteFile(
 		filepath.Join(base, "cpu.max"),
@@ -22,7 +34,6 @@ func setupCgroups(id string, pid int, cfg RunConfig) error {
 		0644,
 	)
 
-	// pids
 	if cfg.PidsMax > 0 {
 		_ = os.WriteFile(
 			filepath.Join(base, "pids.max"),
@@ -31,7 +42,6 @@ func setupCgroups(id string, pid int, cfg RunConfig) error {
 		)
 	}
 
-	// attach process
 	return os.WriteFile(
 		filepath.Join(base, "cgroup.procs"),
 		[]byte(strconv.Itoa(pid)),

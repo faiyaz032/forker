@@ -3,5 +3,9 @@ package runtime
 import "syscall"
 
 func setHostname(cfg Config) error {
-	return syscall.Sethostname([]byte(cfg.Hostname))
+	err := syscall.Sethostname([]byte(cfg.Hostname))
+	if err != nil {
+		logSyscallError("setHostname", err)
+	}
+	return err
 }
