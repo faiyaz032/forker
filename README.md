@@ -1,64 +1,59 @@
 # forker
 
-A minimal Linux container runtime written in Go that runs processes inside isolated sandboxes using namespaces and cgroups. This project implements low-level systems programming concepts to construct container isolation layers from scratch without relying on Docker or containerd.
+A minimal Linux container runtime written in Go. It runs programs in isolated sandboxes using namespaces and cgroups. This is built from scratch using Go and raw Linux system calls to show how containers work under the hood.
 
-## High-Level Overview
+## High Level Overview
 
-At a high level, `forker` acts as a micro-container engine. When you execute a command, it performs the following sequence:
+At a high level, `forker` acts as a tiny container engine. When you run a command:
 
-1. **re-exec trick**: The `forker` parent binary launches itself in a new set of Linux namespaces (UTS, PID, Mount, IPC, Network) via the `syscall.SysProcAttr` configuration.
-2. **child initialization**: The re-executed child process configures the hostname, sets up private mounts (binding isolated `/proc` and `/tmp`), and configures networking.
-3. **command substitution**: The child process calls `syscall.Exec` to replace itself with the target binary, executing it within the isolated namespaces.
-4. **management layer**: The parent process tracks container execution, wires up virtual ethernet links to a host bridge interface, configures resource controls, and manages stops/cleanups.
+1. **re-exec trick**: The parent process starts a child process in new isolated Linux namespaces.
+2. **child init**: The child process sets the custom hostname, mounts private directories, and brings up network interfaces.
+3. **substitution**: The child process replaces itself with the target command so it runs fully isolated.
+4. **management**: The parent process maps the network to the host, configures resource limits, and cleans up when finished.
 
 ## Key Implementation Highlights
 
-Here is the low-level work implemented in this runtime:
+Here is the low level work implemented in this runtime:
 
-### 1. Cgroup Unified Hierarchy Integration
-- **subtree control delegation**: dynamically writes `+cpu +memory +pids` to `/sys/fs/cgroup/cgroup.subtree_control` and `/sys/fs/cgroup/forker/cgroup.subtree_control` to delegate controllers down the directory tree.
-- **resource limitation**: creates individual control groups in `/sys/fs/cgroup/forker/[sandbox_id]/` and applies limits via:
-  - `memory.max` for memory limits (e.g., `128M`)
-  - `cpu.max` for quota and period limits (e.g., converting cpu float to period/quota shares)
-  - `pids.max` to limit process forks and prevent fork bombs
-- **process tracking**: registers the spawned container PID in `cgroup.procs` to ensure all child processes are bound by these restrictions.
+### 1. Cgroup Resource Limits
+- **limits mapping**: Creates control groups under `/sys/fs/cgroup` to set limits for sandbox processes.
+- **resource bounds**: Controls maximum memory use, CPU quotas, and the total number of processes to prevent system crashes.
+- **process tracking**: Attaches the container process to the cgroup folder so all its children are bounded.
 
-### 2. Fault-Tolerant Resource Teardown & Zombie Mount Prevention
-- **lazy unmounting on panic**: registers a panic-recovery and error handler in `ChildMain` using a deferred execution that calls `syscall.Unmount("/proc", syscall.MNT_DETACH)` and `syscall.Unmount("/tmp", syscall.MNT_DETACH)`. This ensures that even if container setup fails or the binary fails to execute, `/proc` and `/tmp` do not leak as zombie mounts on the host.
-- **host cleanup routines**: a defer block tracks container startup phases. If the sandbox fails to become ready within the timeout, the parent process automatically kills the child process, deletes the allocated cgroup, tears down the virtual ethernet interfaces (`veth`), and deletes the sandbox directory.
-- **graceful stopping**: `stopSandbox` kills the container process tree using PGID (`-pid`), tears down virtual network links, removes the cgroup path, and deletes runtime state.
+### 2. Failure Cleanup and Mount Teardown
+- **mount cleanup**: Uses deferred code inside the sandbox child to unmount the `/proc` and `/tmp` filesystems if a crash or exit occurs. This prevents leaving behind zombie mounts on the host system.
+- **host teardown**: If the container fails to start, the parent process automatically kills the child, deletes the cgroup folder, removes the virtual ethernet interfaces, and clears the state.
+- **clean stops**: When stopping a sandbox, it removes all temporary virtual interfaces and files completely.
 
-### 3. Unix Syscall Type Assertion & Error Inspections
-- **precise OS error code extraction**: implements an error parser that type-asserts error objects to `syscall.Errno` (including unwrapping `os.PathError` and `os.SyscallError` structures).
-- **logging**: logs precise kernel-level error strings alongside their numeric values (such as `EPERM` for permission errors, `ENOENT` for missing directories, and `EBUSY` for active mounts).
+### 3. Syscall Error Checking
+- **error verification**: Inspects errors from raw operating system calls and reads the exact error codes like EPERM for permission issues or ENOENT for missing files.
+- **logging**: Displays human friendly operating system error codes directly to make debugging easier.
 
-### 4. Cgo-based Pre-Runtime Namespace Joining (`nsenter`)
-- **constructor injection**: uses `__attribute__((constructor))` in Cgo to intercept execution before the Go runtime initializes its multi-threaded scheduler.
-- **namespace joining**: opens namespace file descriptors under `/proc/[pid]/ns/` and performs `setns` syscalls, allowing additional processes to run inside the exact namespaces of a running sandbox.
+### 4. Joining Existing Sandboxes
+- **namespace joining**: Uses C code via Cgo to let new processes enter the exact namespaces of an already running sandbox.
+- **re-entry**: Opens namespace files under `/proc` to run additional commands inside the same isolation boundaries.
 
 ---
 
-## Architecture & Namespaces
+## Namespaces and Isolation
 
-`forker` creates a separate namespace sandbox using the following Linux namespaces:
-
-| Namespace | syscall flag | Purpose |
+| Namespace | Syscall Flag | Purpose |
 |-----------|--------------|---------|
-| **UTS** | `CLONE_NEWUTS` | Custom isolated hostname inside sandbox |
-| **PID** | `CLONE_NEWPID` | Isolated process tree; container process runs as PID 1 |
-| **Mount** | `CLONE_NEWNS` | Isolated mount table; private `/proc` and `/tmp` |
-| **IPC** | `CLONE_NEWIPC` | Isolated system V IPC and POSIX message queues |
-| **Network** | `CLONE_NEWNET` | Isolated network stack; private `lo` and `eth0` linked via `veth` bridge |
+| UTS | CLONE_NEWUTS | Custom hostname inside the sandbox |
+| PID | CLONE_NEWPID | Process tree isolation where container process is PID 1 |
+| Mount | CLONE_NEWNS | Isolated mount table so directory changes do not leak |
+| IPC | CLONE_NEWIPC | Isolated inter-process communications |
+| Network | CLONE_NEWNET | Isolated network interfaces linked to the host |
 
 ---
 
 ## Build and Usage
 
 ### Prerequisites
-- Linux Kernel (with cgroups enabled)
-- Go 1.21+
-- Root privileges (necessary to perform `mount`, `unmount`, `setns`, and configure namespaces)
-- `iproute2` installed on host
+- Linux with cgroups enabled
+- Go 1.21 or newer
+- Root or sudo privileges
+- iproute2 tool installed on host
 
 ### Building the Project
 ```bash
@@ -72,19 +67,19 @@ sudo ./forker run --memory 128M --cpu 0.5 --pids 50 -- /bin/sh
 
 ### Managing Sandboxes
 ```bash
-# List running sandboxes
+# list running sandboxes
 sudo ./forker ps
 
-# Execute an additional process inside a sandbox
+# run another command inside a sandbox
 sudo ./forker exec <sandbox-id> <command> [args...]
 
-# Stop and clean up a sandbox
+# stop and clean up a sandbox
 sudo ./forker stop <sandbox-id>
 ```
 
 ---
 
 ## Networking Topology
-- **bridge link**: creates a bridge interface named `forker0` with subnet `10.200.0.1/16` on the host.
-- **virtual ethernet pair**: allocates a `veth` pair (`veth-[id]` and `veth-ns-[id]`) for each sandbox, moving the namespace peer into the container where it is renamed to `eth0`.
-- **ip routing & forwarding**: configures NAT iptables rules and sets `/proc/sys/net/ipv4/ip_forward` on the host to route outbound internet traffic from the container.
+- **bridge interface**: Sets up a virtual network bridge named `forker0` on the host.
+- **ethernet pairs**: Allocates a pair of virtual ethernet interfaces to link the host bridge directly into the isolated sandbox network.
+- **traffic routing**: Sets up iptables rules to route internet traffic between the host and the sandbox.
