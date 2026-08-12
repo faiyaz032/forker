@@ -318,6 +318,53 @@ func TestRunInNamespaceUnknownBinary(t *testing.T) {
 	}
 }
 
+func TestRunInNamespaceCleansUpAfterFailedStart(t *testing.T) {
+	skipIfRoot(t)
+
+	dir := tempBasePath(t)
+
+	var err error
+	stdout, _ := captureOutput(t, func() {
+		err = runInNamespace(RunConfig{Command: []string{"true"}})
+	})
+
+	if err == nil {
+		t.Fatal("runInNamespace() = nil, want error when namespaces are unavailable")
+	}
+
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("readdir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Errorf("base path holds %d entries after a failed start, want the sandbox state torn down", len(entries))
+	}
+	if !strings.Contains(stdout, "cleaning up veth") {
+		t.Errorf("stdout = %q, want the veth teardown to run", stdout)
+	}
+}
+
+func TestRunInNamespaceResolvesCommandFromPath(t *testing.T) {
+	skipIfRoot(t)
+
+	tempBasePath(t)
+
+	var err error
+	stdout, _ := captureOutput(t, func() {
+		err = runInNamespace(RunConfig{Command: []string{"true"}})
+	})
+
+	if err == nil {
+		t.Fatal("runInNamespace() = nil, want error when namespaces are unavailable")
+	}
+	if !strings.Contains(stdout, "starting") || !strings.Contains(stdout, "/true") {
+		t.Errorf("stdout = %q, want the resolved absolute binary path", stdout)
+	}
+	if !strings.Contains(stdout, "in sandbox forker-") {
+		t.Errorf("stdout = %q, want a generated sandbox id", stdout)
+	}
+}
+
 func TestSaveSandbox(t *testing.T) {
 	dir := tempBasePath(t)
 	id := "forker-1a2b"
